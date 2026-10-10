@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+from PySide6.QtWidgets import QApplication
+
+from app.ai.router import CommandRouter
+from app.actions.apps import AppController
+from app.actions.browser import BrowserController
+from app.actions.files import FileManager
+from app.actions.windows import WindowsController
+from app.config import SettingsManager, ensure_env_file
+from app.core.logging import LOGGER
+from app.core.security import SecurityManager
+from app.gui.main_window import MainWindow
+from app.speech.stt import SpeechToTextEngine
+from app.speech.tts import TextToSpeechEngine
+from app.speech.wakeword import WakeWordEngine
+
+
+class JarvisAssistant:
+    def __init__(self):
+        ensure_env_file(".env")
+        self.settings = SettingsManager("config.toml").settings
+        self.security = SecurityManager("data/action_history.json")
+        self.stt = SpeechToTextEngine(language=self.settings.voice_language)
+        self.tts = TextToSpeechEngine()
+        self.wakeword = WakeWordEngine(self.settings.wake_word)
+        self.router = CommandRouter()
+        self.apps = AppController()
+        self.browser = BrowserController(self.settings.default_browser)
+        self.files = FileManager(
+            desktop_path=self.settings.desktop_path or str(Path.home() / "Desktop"),
+            documents_path=self.settings.documents_path or str(Path.home() / "Documents"),
+            downloads_path=self.settings.downloads_path or str(Path.home() / "Downloads"),
+        )
+        self.windows = WindowsController()
+        self.gui = MainWindow(self)
+
+    def process_text(self, text: str) -> str:
+        if not text:
+            return "No command detected."
+        self.gui.append_message(f"User: {text}")
+        self.gui.set_status("Thinking", "#f7d66a")
+        intent = self.router.route(text)
+        self.gui.append_message(f"Intent: {intent.action} -> {intent.target}")
+
+        response = self._execute_intent(intent)
+        self.gui.append_message(f"Assistant: {response}")
+        self.tts.speak(response)
+        self.gui.set_status("Idle", "#8df0b8")
+        return response
+
+    def start_listening(self):
+        self.gui.set_status("Listening", "#8df0b8")
+        self.gui.append_message("Listening for a command...")
+        try:
+            command = self.stt.listen_once(timeout=8, phrase_time_limit=5)
+            if command:
+                self.process_text(command)
+            else:
+                self.gui.append_message("No speech detected. Please try again.")
+        except Exception as exc:
+            self.gui.append_message(f"Microphone error: {exc}")
+            self.gui.set_status("Idle", "#ffb3b3")
+
+    def pause_listening(self):
+        self.gui.append_message("Assistant paused.")
+
+    def test_voice(self):
+        self.tts.speak("Voice test successful.")
+
+    def _execute_intent(self, intent):
+        action = intent.action
+        if action == "open_app":
+            return self.apps.open_app(intent.target or "chrome")
+        if action == "close_app":
+            return self.apps.close_app(intent.target)
+        if action == "switch_app":
+            return self.apps.switch_to_app(intent.target)
+        if action == "search_web":
+            query = intent.args.get("query") or intent.target or intent.details or ""
+            return self.browser.search_google(query)
+        if action == "open_website":
+            return self.browser.open_url(intent.args.get("url") or "https://www.google.com")
+        if action == "create_folder":
+            return self.files.create_folder(intent.target)
+        if action == "create_file":
+            return self.files.create_file(intent.target, content="")
+        if action == "find_files":
+            found = self.files.search_files(intent.target or "", root=str(Path.home() / "Downloads"))
+            return f"Files found: {found[:5]}" if found else "No matching files found."
+        if action == "read_file":
+            try:
+                return self.files.read_text_file(Path.home() / "Desktop" / "note.txt")
+            except Exception:
+                return "I need a real file path to read."
+        if action == "tell_time":
+            return self.windows.tell_time()
+        if action == "take_screenshot":
+            return self.windows.take_screenshot()
+        if action == "set_volume":
+            return self.windows.set_volume(int(intent.args.get("level", 50)))
+        if action == "mute_audio":
+            return self.windows.mute_audio()
+        if action == "unmute_audio":
+            return self.windows.unmute_audio()
+        if action == "open_settings":
+            return self.windows.open_settings()
+        if action == "open_notepad":
+            return self.apps.open_app("notepad")
+        if action == "open_terminal":
+            return self.apps.open_app(intent.target or "powershell")
+        if action == "lock_pc":
+            return self.windows.lock_pc()
+        if action == "ask_user":
+            return intent.details or "I need clarification before I do that."
+        return "I can help with that, but this action is not implemented yet."
+
+    def run(self):
+        self.gui.show()
+        if self.settings.listen_on_start:
+            self.start_listening()
+
+
+def main() -> int:
+    app = QApplication(sys.argv)
+    assistant = JarvisAssistant()
+    assistant.run()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,9 @@
+OPENAI_API_KEY=your_api_key_here
+AI_MODEL=gpt-4o-mini
+AI_PROVIDER=openai
+DEFAULT_BROWSER=chrome
+WAKE_WORD=hey jarvis
+VOICE_LANGUAGE=en-US
+STARTUP_ON_LOGIN=false
+MIC_ENABLED=true
+LISTEN_ON_START=false
